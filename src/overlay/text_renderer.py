@@ -35,9 +35,9 @@ class TextRenderer:
 
             pad = 4
             bg_x1 = x
-            bg_y1 = y - th - pad * 2
+            bg_y1 = y
             bg_x2 = max(x + tw + pad * 2, x + w)
-            bg_y2 = y
+            bg_y2 = y + max(h, th + pad * 2)
 
             bg_y1 = max(0, bg_y1)
             bg_x2 = min(self.width, bg_x2)
