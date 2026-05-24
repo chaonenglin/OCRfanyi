@@ -140,14 +140,12 @@ class Coordinator:
                 results = self.ocr_pool.process(cell_img)
                 for (bx, by, bw, bh), text, conf in results:
                     abs_bbox = (cx + bx, cy + by, bw, bh)
-                    # Check translation cache first
                     with self._trans_cache_lock:
                         if text in self._trans_cache:
                             self._trans_cache.move_to_end(text)
-                            translated = self._trans_cache[text]
-                            self.result_queue.put((abs_bbox, translated))
-                            continue
-                    self.translate_queue.put((abs_bbox, text))
+                            self.translate_queue.put((abs_bbox, text, self._trans_cache[text]))
+                        else:
+                            self.translate_queue.put((abs_bbox, text, None))
             except Exception as e:
                 print(f"[OCR] Error: {e}")
 
@@ -164,41 +162,41 @@ class Coordinator:
         batch_mgr = BatchManager()
 
         async def flush():
-            bboxes, texts = batch_mgr.pop_batch()
+            bboxes, texts, cacheds = batch_mgr.pop_batch()
             if not texts:
                 return
 
-            # Deduplicate texts for API call while preserving order
-            unique_texts = []
-            index_map = []  # maps unique_idx -> original_idx
-            for i, t in enumerate(texts):
+            results = []  # (bbox, translated_text) — released together
+
+            # Separate cache hits (cached is not None) from misses
+            misses = []  # (idx, bbox, text)
+            for i in range(len(texts)):
+                if cacheds[i] is not None:
+                    results.append((bboxes[i], cacheds[i]))
+                else:
+                    misses.append((i, bboxes[i], texts[i]))
+
+            if misses:
+                miss_texts = [t for _, _, t in misses]
+                try:
+                    translations = await self.translator_client.translate_batch(miss_texts)
+                except Exception as e:
+                    print(f"[Translate] API error: {e}")
+                    # Release what we have even on error
+                    for bbox, trans in results:
+                        self.result_queue.put((bbox, trans))
+                    return
+
                 with self._trans_cache_lock:
-                    if t in self._trans_cache:
-                        self._trans_cache.move_to_end(t)
-                        self.result_queue.put((bboxes[i], self._trans_cache[t]))
-                    else:
-                        unique_texts.append(t)
-                        index_map.append(i)
+                    for (idx, bbox, text), trans in zip(misses, translations):
+                        if len(self._trans_cache) >= TRANSLATION_CACHE_SIZE:
+                            self._trans_cache.popitem(last=False)
+                        self._trans_cache[text] = trans
+                        results.append((bbox, trans))
 
-            if not unique_texts:
-                return
-
-            try:
-                translations = await self.translator_client.translate_batch(unique_texts)
-            except Exception as e:
-                print(f"[Translate] API error: {e}")
-                return
-
-            # Map back and cache
-            with self._trans_cache_lock:
-                for ti, ui in enumerate(index_map):
-                    trans = translations[ti]
-                    bbox = bboxes[ui]
-                    # Cache
-                    if len(self._trans_cache) >= TRANSLATION_CACHE_SIZE:
-                        self._trans_cache.popitem(last=False)
-                    self._trans_cache[texts[ui]] = trans
-                    self.result_queue.put((bbox, trans))
+            # Release all results from this OCR frame at once
+            for bbox, trans in results:
+                self.result_queue.put((bbox, trans))
 
         while self.running:
             if not self.enabled:
@@ -208,8 +206,8 @@ class Coordinator:
             # Drain all available items from the current OCR frame
             while True:
                 try:
-                    bbox, text = self.translate_queue.get_nowait()
-                    batch_mgr.add(bbox, text)
+                    bbox, text, cached = self.translate_queue.get_nowait()
+                    batch_mgr.add(bbox, text, cached)
                 except Exception:
                     break
 

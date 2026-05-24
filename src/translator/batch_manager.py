@@ -10,8 +10,8 @@ class BatchManager:
         self._first_arrival = None
         self._last_arrival = None
 
-    def add(self, bbox, text: str):
-        self._items.append((bbox, text))
+    def add(self, bbox, text: str, cached=None):
+        self._items.append((bbox, text, cached))
         now = time.monotonic()
         if self._first_arrival is None:
             self._first_arrival = now
@@ -29,8 +29,8 @@ class BatchManager:
             return True
         return False
 
-    def pop_batch(self) -> tuple[list, list]:
-        """Returns (bboxes, texts) of the batch."""
+    def pop_batch(self) -> tuple[list, list, list]:
+        """Returns (bboxes, texts, cacheds) of the batch."""
         batch = self._items[:BATCH_MAX_SIZE]
         self._items = self._items[len(batch):]
         if not self._items:
@@ -38,9 +38,10 @@ class BatchManager:
             self._last_arrival = None
         else:
             self._first_arrival = time.monotonic()
-        bboxes = [b for b, _ in batch]
-        texts = [t for _, t in batch]
-        return bboxes, texts
+        bboxes = [b for b, _, _ in batch]
+        texts = [t for _, t, _ in batch]
+        cacheds = [c for _, _, c in batch]
+        return bboxes, texts, cacheds
 
     def is_empty(self) -> bool:
         return len(self._items) == 0
