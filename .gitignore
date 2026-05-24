@@ -7,4 +7,3 @@ venv/
 *.egg-info/
 dist/
 build/
-"Windows 下 PyTorch 深度学习环境配置/"

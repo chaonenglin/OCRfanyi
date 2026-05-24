@@ -205,14 +205,18 @@ class Coordinator:
                 await asyncio.sleep(0.1)
                 continue
 
-            try:
-                bbox, text = self.translate_queue.get(timeout=0.3)
-                batch_mgr.add(bbox, text)
-            except Exception:
-                pass
+            # Drain all available items from the current OCR frame
+            while True:
+                try:
+                    bbox, text = self.translate_queue.get_nowait()
+                    batch_mgr.add(bbox, text)
+                except Exception:
+                    break
 
-            if batch_mgr.should_flush():
+            if not batch_mgr.is_empty():
                 await flush()
+
+            await asyncio.sleep(0.05)
 
         # Final flush
         if not batch_mgr.is_empty():
