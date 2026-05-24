@@ -24,7 +24,7 @@ BATCH_MAX_SIZE = 20       # max texts per API call
 # --- Overlay ---
 OVERLAY_FPS = 30
 FONT_PATH = "C:/Windows/Fonts/msyh.ttc"  # Microsoft YaHei
-FONT_SIZE_RATIO = 0.9  # font size = bbox height * this ratio
+FONT_SIZE_RATIO = 0.55  # font size = bbox height * this ratio
 BG_ALPHA = 180  # background rectangle opacity (0-255)
 ENTRY_TTL_SECONDS = 5.0  # remove overlay if not refreshed within this time
 

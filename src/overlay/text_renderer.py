@@ -22,18 +22,23 @@ class TextRenderer:
         entries: list of (bbox_xywh, translated_text)
         Returns BGRA uint8 numpy array (H, W, 4), transparent where no text.
         """
+        if not entries:
+            return np.zeros((self.height, self.width, 4), dtype=np.uint8)
+
+        # Use average bbox height for consistent font size across all entries
+        avg_h = sum(h for (_, _, _, h), _ in entries) / len(entries)
+        font_size = max(10, int(avg_h * FONT_SIZE_RATIO))
+        font = self._get_font(font_size)
+
         img = Image.new("RGBA", (self.width, self.height), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
+        pad = 4
 
         for (x, y, w, h), text in entries:
-            font_size = max(10, int(h * FONT_SIZE_RATIO))
-            font = self._get_font(font_size)
-
             bbox = draw.textbbox((0, 0), text, font=font)
             tw = bbox[2] - bbox[0]
             th = bbox[3] - bbox[1]
 
-            pad = 4
             bg_x1 = x
             bg_y1 = y
             bg_x2 = max(x + tw + pad * 2, x + w)

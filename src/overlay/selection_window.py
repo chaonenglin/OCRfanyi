@@ -7,6 +7,7 @@ Esc or right-click cancels.
 
 import ctypes
 import ctypes.wintypes
+import time
 import numpy as np
 
 user32 = ctypes.windll.user32
@@ -123,15 +124,12 @@ class SelectionWindow:
             if w > 10 and h > 10:
                 self.rect = (x, y, w, h)
             self.done = True
-            user32.PostQuitMessage(0)
             return 0
         elif msg == WM_KEYDOWN and wparam == VK_ESCAPE:
             self.done = True
-            user32.PostQuitMessage(0)
             return 0
         elif msg == WM_RBUTTONDOWN:
             self.done = True
-            user32.PostQuitMessage(0)
             return 0
         return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
 
@@ -202,11 +200,11 @@ class SelectionWindow:
 
         msg = ctypes.wintypes.MSG()
         while not self.done:
-            result = user32.GetMessageW(ctypes.byref(msg), None, 0, 0)
-            if result <= 0:
-                break
-            user32.TranslateMessage(ctypes.byref(msg))
-            user32.DispatchMessageW(ctypes.byref(msg))
+            if user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 1):
+                user32.TranslateMessage(ctypes.byref(msg))
+                user32.DispatchMessageW(ctypes.byref(msg))
+            else:
+                time.sleep(0.01)
 
         user32.ShowWindow(self.hwnd, 0)
         return self.rect
