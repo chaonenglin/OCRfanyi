@@ -7,8 +7,14 @@ DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.co
 DEEPSEEK_MODEL = "deepseek-chat"
 
 # --- OCR ---
-OCR_LANG_LIST = ["en"]  # EasyOCR: English only, lightweight
-OCR_CONFIDENCE_THRESHOLD = 0.5
+OCR_LANG_LIST = ["en"]  # default (backward compat)
+
+LANGUAGES = {
+    "en": {"label": "英语 → 中文", "ocr_list": ["en"], "prompt_lang": "English"},
+    "ja": {"label": "日语 → 中文", "ocr_list": ["ja"], "prompt_lang": "Japanese"},
+}
+DEFAULT_SOURCE_LANG = "en"
+OCR_CONFIDENCE_THRESHOLD = 0.2
 OCR_WORKERS = 1  # EasyOCR uses GPU internally; single instance is fine
 
 # --- Capture ---

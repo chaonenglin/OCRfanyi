@@ -6,6 +6,7 @@ Ctrl+Shift+T : Hide overlay.
 Ctrl+C        : Quit.
 """
 
+import os
 import sys
 import time
 import asyncio
@@ -14,7 +15,7 @@ import ctypes.wintypes
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL, OCR_CONFIDENCE_THRESHOLD, BG_ALPHA
+from config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL, OCR_CONFIDENCE_THRESHOLD, BG_ALPHA, LANGUAGES, DEFAULT_SOURCE_LANG
 from src.capture.screen_capture import ScreenCapture
 from src.ocr.paddle_ocr import EasyOCREngine
 from src.overlay.selection_window import SelectionWindow
@@ -45,12 +46,14 @@ class MSG(ctypes.Structure):
     ]
 
 
-SYSTEM_PROMPT = """You are a precise English-to-Chinese translator.
-- Translate each line of English text to Simplified Chinese.
-- Return ONLY the Chinese translation, one line per input line.
+SOURCE_LANG = os.environ.get("OCR_SOURCE_LANG", DEFAULT_SOURCE_LANG)
+LANG_INFO = LANGUAGES.get(SOURCE_LANG, LANGUAGES[DEFAULT_SOURCE_LANG])
+
+SYSTEM_PROMPT = f"""You are a {LANG_INFO['prompt_lang']}-to-Chinese translator. Translate each line to natural, fluent Simplified Chinese.
 - Input lines are separated by "|||". Output translations separated by "|||" in the exact same order.
-- Do NOT add explanations, notes, or any extra text.
-- If a line is not English or cannot be translated, keep it unchanged."""
+- Lines are in reading order (top-to-bottom, left-to-right). Neighboring lines may form a paragraph — translate them coherently, preserving paragraph flow.
+- Return ONLY the translations. No explanations, notes, or extra text.
+- Keep non-{LANG_INFO['prompt_lang']} text unchanged."""
 
 
 async def translate_batch(session, texts: list[str]) -> list[str]:
@@ -151,7 +154,7 @@ async def main_async():
     print("=" * 50)
 
     capture = ScreenCapture()
-    ocr_engine = EasyOCREngine()
+    ocr_engine = EasyOCREngine(lang_list=LANG_INFO["ocr_list"])
     renderer = TextRenderer(capture.width, capture.height)
     overlay = OverlayWindow(capture.width, capture.height)
 
