@@ -22,6 +22,7 @@ from src.capture.screen_capture import ScreenCapture
 from src.ocr.paddle_ocr import EasyOCREngine
 from src.overlay.selection_window import SelectionWindow
 from src.overlay.overlay_window import OverlayWindow
+from src.overlay.focus_host import FocusHost
 from src.overlay.text_renderer import TextRenderer
 
 def _make_system_prompt(source_lang):
@@ -289,6 +290,10 @@ class App:
         self._hk_trigger_hide = threading.Event()
         self._hk_stop = threading.Event()
         self._hk_listen_target = None
+
+        # 焦点宿主：翻译会话期间持有前台，防止游戏 BGM 因短暂抢焦点而闪烁
+        self._focus_host = None
+        self._focus_session = False
 
         self._build_ui()
         self.root.after(100, self._init_engines)
@@ -571,6 +576,7 @@ class App:
                 self._was_auto = False
             if self.overlay:
                 self.overlay.hide()
+            self._end_focus_session()  # 暂停时释放前台占位，游戏 BGM 恢复正常
             self._stop_hotkey_thread()
             self.status_var.set("已暂停 — 按键功能已释放")
         else:
@@ -620,6 +626,31 @@ class App:
         draw.text((cx, cy), text, font=font, fill=(255, 255, 255, 255))
         self.overlay.update(np.array(img))
         self.overlay.show()
+
+    def _start_focus_session(self):
+        """开启焦点会话：按需创建 FocusHost 并让其抢占前台。
+        会话持续到 _end_focus_session() 被调用，期间游戏因失焦而保持音频暂停。
+        """
+        if self._focus_host is None:
+            self._focus_host = FocusHost()
+        if not self._focus_session:
+            self._focus_host.begin()
+            self._focus_session = True
+
+    def _end_focus_session(self):
+        """结束焦点会话：隐藏 FocusHost，前台由用户下一次点击决定归属。"""
+        if self._focus_session and self._focus_host is not None:
+            self._focus_host.end()
+        self._focus_session = False
+
+    def _focus_panel(self):
+        """将控制面板重新显示并置顶（替代原先的裸 deiconify）。"""
+        self.root.deiconify()
+        self.root.lift()
+        try:
+            self.root.focus_force()
+        except tk.TclError:
+            pass
 
     def _on_customize_hotkey(self, which):
         if self._hk_listen_target is not None:
@@ -716,6 +747,11 @@ class App:
         """Hide the translation overlay."""
         if self.overlay:
             self.overlay.hide()
+        # 只有存在焦点会话时才结束并拉起控制面板；
+        # 若焦点原本在游戏（热键翻译路径），则不打扰当前前台。
+        if self._focus_session:
+            self._end_focus_session()
+            self._focus_panel()
         self.status_var.set("叠加层已隐藏")
 
     def _on_hotkey_translate(self):
@@ -733,6 +769,9 @@ class App:
 
         self._translating = True
         x, y, w, h = self._auto_region
+        # 热键翻译不抢占前台：浮层本身是 NOACTIVATE，不影响焦点；
+        # 若焦点在游戏，游戏继续保持前台，不干扰用户操作。
+        _overlay_shown = False  # True 表示浮层已成功显示
 
         try:
             # Capture
@@ -770,6 +809,7 @@ class App:
             bitmap = self.renderer.render(entry_list)
             self.overlay.update(bitmap)
             self.overlay.show()
+            _overlay_shown = True  # 浮层已显示，焦点会话保持到用户按隐藏键
 
             for item in self.tree.get_children():
                 self.tree.delete(item)
@@ -924,14 +964,17 @@ class App:
             if self.overlay:
                 self.overlay.hide()
 
-            self.root.withdraw()
+            # 面板可见时先冻屏，再 withdraw；
+            # 冻屏后立刻开启焦点会话，使 withdraw 后前台由 FocusHost 接管而非游戏。
             self.root.update_idletasks()
             time.sleep(0.15)
-
-            # 在显示框选层之前 capture_full() 冻结全屏快照。
-            # SelectionWindow 用 snapshot 铺暗化底图，仅在拖拽矩形内露出原色。
-            # OCR 使用 snapshot 的切片，保证「所见即所识别」。
             snapshot = self.capture.capture_full()
+
+            self._start_focus_session()
+            _overlay_shown = False  # True 表示浮层已成功显示，应保持焦点会话
+
+            self.root.withdraw()
+            self.root.update_idletasks()
 
             try:
                 win = SelectionWindow(self.capture.width, self.capture.height,
@@ -981,6 +1024,7 @@ class App:
                 bitmap = self.renderer.render(entry_list)
                 self.overlay.update(bitmap)
                 self.overlay.show()
+                _overlay_shown = True  # 浮层已显示，焦点会话保持到用户按隐藏键
 
                 for item in self.tree.get_children():
                     self.tree.delete(item)
@@ -990,14 +1034,16 @@ class App:
                 self.status_var.set(
                     f"完成 — {len(texts)} 段文字 | OCR {ocr_ms:.0f}ms | 翻译 {api_ms:.0f}ms")
 
-
             except Exception as e:
                 self.status_var.set(f"错误: {e}")
                 messagebox.showerror("错误", str(e))
         finally:
             self.select_btn.set_enabled(True)
-            self.root.deiconify()
             self._selecting = False
+            self._focus_panel()
+            if not _overlay_shown:
+                # 未能成功显示浮层（取消/出错），立即结束焦点会话
+                self._end_focus_session()
 
     def _clear_log(self):
         self._stop_auto()
@@ -1009,6 +1055,8 @@ class App:
             self.tree.delete(item)
         if self.overlay:
             self.overlay.hide()
+        self._end_focus_session()  # 清空记录时结束焦点会话，归还前台
+        self._focus_panel()
         self.status_var.set("记录已清空")
 
     def run(self):
@@ -1017,6 +1065,10 @@ class App:
     def _on_close(self):
         self._stop_auto()
         self._stop_hotkey_thread()
+        self._end_focus_session()
+        if self._focus_host:
+            self._focus_host.destroy()  # 销毁替身窗口，释放 Win32 资源
+            self._focus_host = None
         if self.overlay:
             self.overlay.destroy()
         self._executor.shutdown(wait=False)

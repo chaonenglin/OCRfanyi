@@ -16,7 +16,6 @@ kernel32 = ctypes.windll.kernel32
 
 WS_EX_LAYERED = 0x00080000
 WS_EX_TOPMOST = 0x00000008
-WS_EX_NOACTIVATE = 0x08000000
 WS_POPUP = 0x80000000
 ULW_ALPHA = 0x00000002
 
@@ -90,6 +89,15 @@ class SelectionWindow:
         if self._dark is not None:
             self._update_window(self._dark)
 
+        # 构造完成后立刻抢占前台，确保 FocusHost 交接后框选层能接手焦点，
+        # run() 入口再调一次兜底（防止消息循环启动前被其他窗口抢走）。
+        self._grab_foreground()
+
+    def _grab_foreground(self):
+        if self.hwnd:
+            user32.ShowWindow(self.hwnd, 5)
+            user32.SetForegroundWindow(self.hwnd)
+
     def _create_window(self):
         hinst = kernel32.GetModuleHandleW(None)
 
@@ -114,7 +122,9 @@ class SelectionWindow:
         wc.hCursor = user32.LoadCursorW(None, 32512)  # IDC_CROSS
         user32.RegisterClassW(ctypes.byref(wc))
 
-        ex_style = WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_NOACTIVATE
+        # 去掉 WS_EX_NOACTIVATE：框选层需要能被真正激活，
+        # 这样 SetForegroundWindow 才有效，否则焦点仍会落回游戏。
+        ex_style = WS_EX_LAYERED | WS_EX_TOPMOST
         self.hwnd = user32.CreateWindowExW(
             ex_style, "OCRSelectionOverlay", None, WS_POPUP,
             0, 0, self.width, self.height,
@@ -234,8 +244,7 @@ class SelectionWindow:
 
     def run(self):
         """Block until user selects a region or cancels. Returns (x,y,w,h) or None."""
-        user32.ShowWindow(self.hwnd, 5)
-        user32.SetForegroundWindow(self.hwnd)
+        self._grab_foreground()
 
         msg = ctypes.wintypes.MSG()
         while not self.done:
