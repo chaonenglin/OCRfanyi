@@ -928,8 +928,14 @@ class App:
             self.root.update_idletasks()
             time.sleep(0.15)
 
+            # 在显示框选层之前 capture_full() 冻结全屏快照。
+            # SelectionWindow 用 snapshot 铺暗化底图，仅在拖拽矩形内露出原色。
+            # OCR 使用 snapshot 的切片，保证「所见即所识别」。
+            snapshot = self.capture.capture_full()
+
             try:
-                win = SelectionWindow(self.capture.width, self.capture.height)
+                win = SelectionWindow(self.capture.width, self.capture.height,
+                                      snapshot=snapshot)
                 rect = win.run()
                 win.destroy()
 
@@ -945,7 +951,7 @@ class App:
                 self.root.update()
 
                 t0 = time.time()
-                img = self.capture.capture_region(x, y, w, h)
+                img = snapshot[y:y + h, x:x + w].copy()
                 results = self.ocr_engine.detect_and_recognize(img)
                 ocr_ms = (time.time() - t0) * 1000
 

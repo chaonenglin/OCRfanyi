@@ -61,7 +61,7 @@ def _wnd_proc(hwnd, msg, wparam, lparam):
 
 
 class SelectionWindow:
-    def __init__(self, width, height):
+    def __init__(self, width, height, snapshot=None):
         global _instance
         _instance = self
 
@@ -72,7 +72,23 @@ class SelectionWindow:
         self._end = None
         self.done = False
         self.rect = None
+
+        # 可选冻结快照模式：传入 snapshot 时，全屏显示其暗化副本，
+        # 用户框选的矩形区域内恢复为 snapshot 的原始颜色。
+        self._dark = None
+        self._orig = None
+        if snapshot is not None and snapshot.shape[:2] == (height, width):
+            orig = np.ascontiguousarray(snapshot, dtype=np.uint8).copy()
+            orig[..., 3] = 255
+            self._orig = orig
+            dark = orig.copy()
+            dark[..., :3] = (dark[..., :3].astype(np.uint16) * 4 // 10).astype(np.uint8)
+            self._dark = dark
+
         self._create_window()
+
+        if self._dark is not None:
+            self._update_window(self._dark)
 
     def _create_window(self):
         hinst = kernel32.GetModuleHandleW(None)
@@ -134,20 +150,43 @@ class SelectionWindow:
         return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
 
     def _render(self):
-        if self._start is None or self._end is None:
+        if self._dark is None:
+            if self._start is None or self._end is None:
+                return
+
+            bitmap = np.zeros((self.height, self.width, 4), dtype=np.uint8)
+            bitmap[:, :, 3] = 100
+
+            x = min(self._start[0], self._end[0])
+            y = min(self._start[1], self._end[1])
+            w = abs(self._end[0] - self._start[0])
+            h = abs(self._end[1] - self._start[1])
+
+            if w > 0 and h > 0:
+                bitmap[y:y + h, x:x + w, 3] = 0
+                # 白色边框（1px）
+                border_color = (255, 255, 255, 255)
+                bitmap[y:y + h, max(0, x - 1):x] = border_color
+                bitmap[y:y + h, x + w:x + w + 1] = border_color
+                bitmap[max(0, y - 1):y, x:x + w] = border_color
+                bitmap[y + h:y + h + 1, x:x + w] = border_color
+
+            self._update_window(bitmap)
             return
 
-        bitmap = np.zeros((self.height, self.width, 4), dtype=np.uint8)
-        bitmap[:, :, 3] = 100
+        # 冻结快照模式：全屏暗化底图，框选区域内为原色。
+        if self._start is None or self._end is None:
+            self._update_window(self._dark)
+            return
 
+        bitmap = self._dark.copy()
         x = min(self._start[0], self._end[0])
         y = min(self._start[1], self._end[1])
         w = abs(self._end[0] - self._start[0])
         h = abs(self._end[1] - self._start[1])
 
         if w > 0 and h > 0:
-            bitmap[y:y + h, x:x + w, 3] = 0
-            # white border (1px)
+            bitmap[y:y + h, x:x + w] = self._orig[y:y + h, x:x + w]
             border_color = (255, 255, 255, 255)
             bitmap[y:y + h, max(0, x - 1):x] = border_color
             bitmap[y:y + h, x + w:x + w + 1] = border_color
