@@ -12,3 +12,7 @@ OCRfanyi.exe
 OCRfanyi.spec
 trace.log
 *.log
+
+# 用于存放不适合提交进 git 的个人本地私有文件
+.local/*
+!.local/.gitkeep

@@ -16,7 +16,6 @@ kernel32 = ctypes.windll.kernel32
 
 WS_EX_LAYERED = 0x00080000
 WS_EX_TOPMOST = 0x00000008
-WS_EX_NOACTIVATE = 0x08000000
 WS_POPUP = 0x80000000
 ULW_ALPHA = 0x00000002
 
@@ -61,7 +60,7 @@ def _wnd_proc(hwnd, msg, wparam, lparam):
 
 
 class SelectionWindow:
-    def __init__(self, width, height):
+    def __init__(self, width, height, snapshot=None):
         global _instance
         _instance = self
 
@@ -72,7 +71,32 @@ class SelectionWindow:
         self._end = None
         self.done = False
         self.rect = None
+
+        # 可选冻结快照模式：传入 snapshot 时，全屏显示其暗化副本，
+        # 用户框选的矩形区域内恢复为 snapshot 的原始颜色。
+        self._dark = None
+        self._orig = None
+        if snapshot is not None and snapshot.shape[:2] == (height, width):
+            orig = np.ascontiguousarray(snapshot, dtype=np.uint8).copy()
+            orig[..., 3] = 255
+            self._orig = orig
+            dark = orig.copy()
+            dark[..., :3] = (dark[..., :3].astype(np.uint16) * 4 // 10).astype(np.uint8)
+            self._dark = dark
+
         self._create_window()
+
+        if self._dark is not None:
+            self._update_window(self._dark)
+
+        # 构造完成后立刻抢占前台，确保 FocusHost 交接后框选层能接手焦点，
+        # run() 入口再调一次兜底（防止消息循环启动前被其他窗口抢走）。
+        self._grab_foreground()
+
+    def _grab_foreground(self):
+        if self.hwnd:
+            user32.ShowWindow(self.hwnd, 5)
+            user32.SetForegroundWindow(self.hwnd)
 
     def _create_window(self):
         hinst = kernel32.GetModuleHandleW(None)
@@ -98,7 +122,9 @@ class SelectionWindow:
         wc.hCursor = user32.LoadCursorW(None, 32512)  # IDC_CROSS
         user32.RegisterClassW(ctypes.byref(wc))
 
-        ex_style = WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_NOACTIVATE
+        # 去掉 WS_EX_NOACTIVATE：框选层需要能被真正激活，
+        # 这样 SetForegroundWindow 才有效，否则焦点仍会落回游戏。
+        ex_style = WS_EX_LAYERED | WS_EX_TOPMOST
         self.hwnd = user32.CreateWindowExW(
             ex_style, "OCRSelectionOverlay", None, WS_POPUP,
             0, 0, self.width, self.height,
@@ -134,20 +160,43 @@ class SelectionWindow:
         return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
 
     def _render(self):
-        if self._start is None or self._end is None:
+        if self._dark is None:
+            if self._start is None or self._end is None:
+                return
+
+            bitmap = np.zeros((self.height, self.width, 4), dtype=np.uint8)
+            bitmap[:, :, 3] = 100
+
+            x = min(self._start[0], self._end[0])
+            y = min(self._start[1], self._end[1])
+            w = abs(self._end[0] - self._start[0])
+            h = abs(self._end[1] - self._start[1])
+
+            if w > 0 and h > 0:
+                bitmap[y:y + h, x:x + w, 3] = 0
+                # 白色边框（1px）
+                border_color = (255, 255, 255, 255)
+                bitmap[y:y + h, max(0, x - 1):x] = border_color
+                bitmap[y:y + h, x + w:x + w + 1] = border_color
+                bitmap[max(0, y - 1):y, x:x + w] = border_color
+                bitmap[y + h:y + h + 1, x:x + w] = border_color
+
+            self._update_window(bitmap)
             return
 
-        bitmap = np.zeros((self.height, self.width, 4), dtype=np.uint8)
-        bitmap[:, :, 3] = 100
+        # 冻结快照模式：全屏暗化底图，框选区域内为原色。
+        if self._start is None or self._end is None:
+            self._update_window(self._dark)
+            return
 
+        bitmap = self._dark.copy()
         x = min(self._start[0], self._end[0])
         y = min(self._start[1], self._end[1])
         w = abs(self._end[0] - self._start[0])
         h = abs(self._end[1] - self._start[1])
 
         if w > 0 and h > 0:
-            bitmap[y:y + h, x:x + w, 3] = 0
-            # white border (1px)
+            bitmap[y:y + h, x:x + w] = self._orig[y:y + h, x:x + w]
             border_color = (255, 255, 255, 255)
             bitmap[y:y + h, max(0, x - 1):x] = border_color
             bitmap[y:y + h, x + w:x + w + 1] = border_color
@@ -195,8 +244,7 @@ class SelectionWindow:
 
     def run(self):
         """Block until user selects a region or cancels. Returns (x,y,w,h) or None."""
-        user32.ShowWindow(self.hwnd, 5)
-        user32.SetForegroundWindow(self.hwnd)
+        self._grab_foreground()
 
         msg = ctypes.wintypes.MSG()
         while not self.done:
